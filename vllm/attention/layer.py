@@ -83,6 +83,18 @@ class Attention(nn.Module):
                              alibi_slopes, sliding_window, kv_cache_dtype,
                              blocksparse_params)
 
+    def get_slots_to_transfer(self, kv_cache: Optional[torch.Tensor], slots_mapping: torch.Tensor) -> torch.Tensor:
+        if kv_cache is None:
+            return
+        assert len(kv_cache.shape) == 5
+        num_blocks, slots_per_block = kv_cache.shape[1], kv_cache.shape[2]
+        for sid in slots_mapping:
+            bid, offset = sid // slots_per_block, sid % slots_per_block
+            assert bid <= num_blocks
+            k_cache, v_cache = kv_cache[0, bid, offset], kv_cache[0, bid, offset]
+            print(sid,k_cache.shape, end=' || ')
+        print()
+
     def forward(
         self,
         query: torch.Tensor,
@@ -91,15 +103,20 @@ class Attention(nn.Module):
         kv_cache: Optional[torch.Tensor],
         attn_metadata: AttentionMetadata,
         attn_type: AttentionType = AttentionType.DECODER,
+        layer_id: int = 0
     ) -> torch.Tensor:
 
-        return self.impl.forward(query,
-                                 key,
-                                 value,
-                                 kv_cache,
-                                 attn_metadata,
-                                 self._kv_scale,
-                                 attn_type=attn_type)
+        ret = self.impl.forward(query,
+                                key,
+                                value,
+                                kv_cache,
+                                attn_metadata,
+                                self._kv_scale,
+                                attn_type=attn_type)
+        if layer_id == 0 or layer_id == 1:
+            print("prefill" if attn_metadata.decode_metadata is None else "decode")
+            self.get_slots_to_transfer(kv_cache, attn_metadata.slot_mapping)
+        return ret
 
     def extra_repr(self) -> str:
         s = f"head_size={self.impl.head_size}"  # type: ignore
